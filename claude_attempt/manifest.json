@@ -1,0 +1,9 @@
+{
+  "id": "monaco-code-editor",
+  "name": "Monaco Code Editor",
+  "version": "1.0.0",
+  "minAppVersion": "1.0.0",
+  "description": "View and edit code files in Obsidian using the Monaco editor (the engine behind VS Code), with full syntax highlighting.",
+  "author": "Dan",
+  "isDesktopOnly": true
+}

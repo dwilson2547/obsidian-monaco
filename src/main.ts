@@ -2,14 +2,32 @@ import { Notice, Plugin, TFile } from 'obsidian';
 import { DEFAULT_SETTINGS, MonacoPluginSettings, MonacoSettingTab } from './settings';
 import { MONACO_VIEW_TYPE, MonacoView } from './monacoView';
 
+type ViewRegistryLike = {
+	typeByExtension: Record<string, string>;
+};
+
+type AppWithViewRegistry = Plugin['app'] & {
+	viewRegistry?: ViewRegistryLike;
+};
+
+function normalizeExtensions(extensions: string[]): string[] {
+	return Array.from(
+		new Set(
+			extensions
+				.map(ext => ext.trim().toLowerCase())
+				.filter(ext => ext.length > 0 && ext !== 'md' && ext !== 'markdown'),
+		),
+	);
+}
+
 export default class MonacoPlugin extends Plugin {
 	settings!: MonacoPluginSettings;
 
 	/**
-	 * Extensions currently wired to the Monaco view in the Obsidian viewRegistry.
-	 * Tracked here so we can remove/re-add them when the user changes settings.
+	 * Extensions currently routed to the Monaco view.
 	 */
 	private registeredExtensions: string[] = [];
+	private readonly originalExtensionTypes = new Map<string, string | undefined>();
 
 	// ── Plugin lifecycle ─────────────────────────────────────────────────────
 
@@ -20,49 +38,82 @@ export default class MonacoPlugin extends Plugin {
 		this.registerView(MONACO_VIEW_TYPE, leaf => new MonacoView(leaf, this));
 
 		// Wire file extensions → Monaco view
-		this.registerEnabledExtensions();
+		this.syncRegisteredExtensions();
 
 		// Settings tab
 		this.addSettingTab(new MonacoSettingTab(this.app, this));
 	}
 
 	onunload(): void {
-		// Obsidian automatically removes registered extensions and views on unload
+		this.restoreRegisteredExtensions();
 	}
 
 	// ── Extension registration ───────────────────────────────────────────────
 
-	private registerEnabledExtensions(): void {
-		const exts = this.settings.enabledExtensions.filter(e => e.length > 0);
-		if (exts.length > 0) {
-			this.registerExtensions(exts, MONACO_VIEW_TYPE);
-			this.registeredExtensions = [...exts];
-		}
+	private getTypeByExtension(): Record<string, string> | null {
+		return ((this.app as AppWithViewRegistry).viewRegistry?.typeByExtension) ?? null;
 	}
 
-	/**
-	 * Dynamically update which extensions are routed to Monaco without requiring
-	 * a full plugin reload.  Accesses the internal viewRegistry map directly
-	 * since the public API only exposes additive registration.
-	 */
-	updateRegisteredExtensions(): void {
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		const typeByExtension: Record<string, string> = (this.app as any).viewRegistry?.typeByExtension ?? {};
-
-		// Remove previously registered extensions
-		for (const ext of this.registeredExtensions) {
-			if (typeByExtension[ext] === MONACO_VIEW_TYPE) {
+	private restoreExtension(
+		typeByExtension: Record<string, string>,
+		ext: string,
+	): void {
+		if (typeByExtension[ext] === MONACO_VIEW_TYPE) {
+			const originalType = this.originalExtensionTypes.get(ext);
+			if (originalType) {
+				typeByExtension[ext] = originalType;
+			} else {
 				delete typeByExtension[ext];
 			}
 		}
 
-		// Register updated set
-		const next = this.settings.enabledExtensions.filter(e => e.length > 0);
-		for (const ext of next) {
-			typeByExtension[ext] = MONACO_VIEW_TYPE;
-		}
-		this.registeredExtensions = next;
+		this.originalExtensionTypes.delete(ext);
+	}
 
+	private syncRegisteredExtensions(): void {
+		const typeByExtension = this.getTypeByExtension();
+		const next = normalizeExtensions(this.settings.enabledExtensions);
+		this.settings.enabledExtensions = next;
+
+		if (!typeByExtension) {
+			this.registeredExtensions = [];
+			return;
+		}
+
+		const nextSet = new Set(next);
+		for (const ext of this.registeredExtensions) {
+			if (!nextSet.has(ext)) {
+				this.restoreExtension(typeByExtension, ext);
+			}
+		}
+
+		for (const ext of next) {
+			const currentType = typeByExtension[ext];
+			if (currentType !== MONACO_VIEW_TYPE) {
+				this.originalExtensionTypes.set(ext, currentType);
+				typeByExtension[ext] = MONACO_VIEW_TYPE;
+			}
+		}
+
+		this.registeredExtensions = next;
+	}
+
+	private restoreRegisteredExtensions(): void {
+		const typeByExtension = this.getTypeByExtension();
+		if (!typeByExtension) return;
+
+		for (const ext of this.registeredExtensions) {
+			this.restoreExtension(typeByExtension, ext);
+		}
+		this.registeredExtensions = [];
+	}
+
+	/**
+	 * Dynamically update which extensions are routed to Monaco without requiring
+	 * a full plugin reload.
+	 */
+	updateRegisteredExtensions(): void {
+		this.syncRegisteredExtensions();
 		new Notice('Monaco: file-type settings updated. Re-open files to apply changes.');
 	}
 
@@ -71,7 +122,7 @@ export default class MonacoPlugin extends Plugin {
 	/** Scan the entire vault, collect all distinct extensions, and persist them. */
 	async scanVaultExtensions(): Promise<void> {
 		const found = new Set<string>();
-		for (const file of this.app.vault.getFiles() as TFile[]) {
+		for (const file of this.app.vault.getFiles()) {
 			const ext = file.extension?.toLowerCase();
 			if (ext && ext !== 'md') {
 				found.add(ext);
@@ -85,11 +136,13 @@ export default class MonacoPlugin extends Plugin {
 	// ── Settings persistence ─────────────────────────────────────────────────
 
 	async loadSettings(): Promise<void> {
-		this.settings = Object.assign(
-			{},
-			DEFAULT_SETTINGS,
-			(await this.loadData()) as Partial<MonacoPluginSettings>,
-		);
+		const loaded = (await this.loadData()) as Partial<MonacoPluginSettings> | null;
+		this.settings = {
+			...DEFAULT_SETTINGS,
+			...loaded,
+			enabledExtensions: normalizeExtensions(loaded?.enabledExtensions ?? DEFAULT_SETTINGS.enabledExtensions),
+			vaultExtensions: normalizeExtensions(loaded?.vaultExtensions ?? DEFAULT_SETTINGS.vaultExtensions),
+		};
 	}
 
 	async saveSettings(): Promise<void> {
