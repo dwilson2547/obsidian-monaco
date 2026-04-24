@@ -1,0 +1,10 @@
+{
+	"id": "obsidian-monaco",
+	"name": "Monaco Editor",
+	"version": "1.0.0",
+	"minAppVersion": "0.15.0",
+	"description": "Renders code files using the Monaco editor with full syntax highlighting and multi-cursor editing.",
+	"author": "dwilson2547",
+	"authorUrl": "https://github.com/dwilson2547",
+	"isDesktopOnly": true
+}
