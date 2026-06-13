@@ -1,4 +1,4 @@
-import { Notice, Plugin, TFile } from 'obsidian';
+import { Notice, Plugin } from 'obsidian';
 import { DEFAULT_SETTINGS, MonacoPluginSettings, MonacoSettingTab } from './settings';
 import { MONACO_VIEW_TYPE, MonacoView } from './monacoView';
 
@@ -36,6 +36,20 @@ export default class MonacoPlugin extends Plugin {
 
 		// Register the Monaco view factory
 		this.registerView(MONACO_VIEW_TYPE, leaf => new MonacoView(leaf, this));
+		this.addCommand({
+			id: 'open-new-monaco-editor-tab',
+			name: 'Open new editor tab',
+			callback: async () => {
+				const leaf = this.app.workspace.getLeaf('tab');
+				await leaf.setViewState({
+					type: MONACO_VIEW_TYPE,
+					active: true,
+				});
+				this.app.workspace.setActiveLeaf(leaf, {
+					focus: true,
+				});
+			},
+		});
 
 		// Wire file extensions → Monaco view
 		this.syncRegisteredExtensions();

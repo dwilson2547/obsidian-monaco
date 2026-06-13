@@ -25,6 +25,8 @@ export default tseslint.config(
 	globalIgnores([
 		"node_modules",
 		"dist",
+		"vendor",
+		"claude_attempt",
 		"esbuild.config.mjs",
 		"eslint.config.js",
 		"version-bump.mjs",

@@ -1,7 +1,7 @@
 import esbuild from "esbuild";
 import process from "process";
 import { builtinModules } from 'node:module';
-import { readFileSync, writeFileSync, existsSync, unlinkSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, unlinkSync, cpSync, mkdirSync, rmSync } from 'fs';
 
 const banner =
 `/*
@@ -40,6 +40,76 @@ function mergeCssPlugin() {
 	};
 }
 
+function copyNodePtyRuntime() {
+	const sourceRoot = 'node_modules/node-pty';
+	const targetRoot = 'vendor/node-pty';
+
+	rmSync(targetRoot, { recursive: true, force: true });
+	mkdirSync(targetRoot, { recursive: true });
+
+	const libSourcePath = `${sourceRoot}/lib`;
+	if (existsSync(libSourcePath)) {
+		cpSync(libSourcePath, `${targetRoot}/lib`, {
+			recursive: true,
+			filter: sourcePath =>
+				!sourcePath.endsWith('.map') &&
+				!sourcePath.endsWith('.test.js'),
+		});
+	}
+
+	const releaseSourcePath = `${sourceRoot}/build/Release`;
+	if (existsSync(releaseSourcePath)) {
+		cpSync(releaseSourcePath, `${targetRoot}/build/Release`, {
+			recursive: true,
+		});
+	}
+
+	const prebuildsSourcePath = `${sourceRoot}/prebuilds`;
+	if (existsSync(prebuildsSourcePath)) {
+		cpSync(prebuildsSourcePath, `${targetRoot}/prebuilds`, {
+			recursive: true,
+		});
+	}
+
+	const windowsPtyAgentPath = `${targetRoot}/lib/windowsPtyAgent.js`;
+	if (existsSync(windowsPtyAgentPath)) {
+		const windowsPtyAgentSource = readFileSync(windowsPtyAgentPath, 'utf-8');
+		const patchedSnippet = [
+			'        if (this._useConpty) {',
+			'            // The conout socket must be ready out on another thread to avoid deadlocks',
+			'            this._conoutSocketWorker = new windowsConoutConnection_1.ConoutConnection(term.conout, this._useConptyDll);',
+			'            this._conoutSocketWorker.onReady(function () {',
+			'                _this._conoutSocketWorker.connectSocket(_this._outSocket);',
+			'            });',
+			'        }',
+			'        else {',
+			'            this._outSocket.connect(term.conout);',
+			'        }',
+			"        this._outSocket.on('connect', function () {",
+			"            _this._outSocket.emit('ready_datapipe');",
+			'        });',
+		].join('\n');
+		const originalSnippetPattern =
+			/        \/\/ The conout socket must be ready out on another thread to avoid deadlocks\r?\n        this\._conoutSocketWorker = new windowsConoutConnection_1\.ConoutConnection\(term\.conout, this\._useConptyDll\);\r?\n        this\._conoutSocketWorker\.onReady\(function \(\) \{\r?\n            _this\._conoutSocketWorker\.connectSocket\(_this\._outSocket\);\r?\n        \}\);\r?\n        this\._outSocket\.on\('connect', function \(\) \{\r?\n            _this\._outSocket\.emit\('ready_datapipe'\);\r?\n        \}\);/;
+
+		writeFileSync(
+			windowsPtyAgentPath,
+			windowsPtyAgentSource.replace(originalSnippetPattern, patchedSnippet),
+		);
+	}
+}
+
+function copyTerminalRuntimePlugin() {
+	return {
+		name: 'copy-terminal-runtime',
+		setup(build) {
+			build.onEnd(() => {
+				copyNodePtyRuntime();
+			});
+		}
+	};
+}
+
 const context = await esbuild.context({
 	banner: {
 		js: banner,
@@ -73,7 +143,7 @@ const context = await esbuild.context({
 		// Inline any font files Monaco references as data URIs
 		'.ttf': 'dataurl',
 	},
-	plugins: [mergeCssPlugin()],
+	plugins: [mergeCssPlugin(), copyTerminalRuntimePlugin()],
 });
 
 if (prod) {
